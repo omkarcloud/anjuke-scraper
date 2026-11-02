@@ -1,0 +1,10 @@
+services:
+  anjuke-scraper:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      # Recommended beyond a few calls a minute — a rotating proxy (fresh IP per connection).
+      # - ANJUKE_PROXY=http://user:pass@host:port
