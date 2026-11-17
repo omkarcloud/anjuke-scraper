@@ -23,7 +23,7 @@ Value conventions (shared with the other scraper packages):
   * keys    snake_case; `link` not `url`; booleans as questions; absent -> null
   * strings "" / "0" placeholders -> null where the site uses them as "none"
 """
-import json
+import fastjson
 import re
 from datetime import datetime, timezone
 
@@ -31,6 +31,8 @@ from bs4 import BeautifulSoup
 
 from upwork.nuxt import NuxtStateError, decode_nuxt2, ld_json
 from anjuke import refs
+from scraper_utils.values import num as _float, number as _num, to_int as _int
+from scraper_utils.text import squashed_any as _str
 
 CURRENCY = "CNY"
 
@@ -40,41 +42,6 @@ _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 # ---- value helpers ---------------------------------------------------------------------
-
-def _str(value):
-    """Collapse whitespace; "" / None -> None."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = " ".join(str(value).split())
-    return text or None
-
-
-def _int(value):
-    if value in (None, "", "0.0") and value != 0:
-        return None
-    try:
-        return int(float(str(value).replace(",", "")))
-    except (TypeError, ValueError):
-        return None
-
-
-def _float(value):
-    if value in (None, ""):
-        return None
-    try:
-        return float(str(value).replace(",", ""))
-    except (TypeError, ValueError):
-        return None
-
-
-def _num(value):
-    """int when whole, else float; None when not numeric."""
-    f = _float(value)
-    if f is None:
-        return None
-    return int(f) if f.is_integer() else f
 
 
 def _nonzero(value):
@@ -384,7 +351,7 @@ def _sale_auction(prop):
     """The card's placement code from its `isauction` JSON: "201" organic
     (and the "广告" ad), "221" a paid 热推 promoted slot."""
     try:
-        return _str((json.loads(prop.get("isauction") or "{}") or {}).get("auction"))
+        return _str((fastjson.loads(prop.get("isauction") or "{}") or {}).get("auction"))
     except (ValueError, TypeError, AttributeError):
         return None
 
@@ -556,11 +523,14 @@ def parse_sale_detail(html, listing_id, city):
     budget = attr.get("budget") or {}
     comm = view.get("community") or {}
     lat, lng = _lat_lng(comm.get("lat"), comm.get("lng"))
-    remember_city_id(city, prop.get("city_id"))
     top_comm = data.get("community") if isinstance(data.get("community"), dict) and (data.get("community") or {}).get("base") else None
+    # a bare id carries no city (and a caller's city may be the wrong one: any
+    # city host serves any id); the page's own links carry the listing's city.
+    # Resolve it before the city-id cache learns the pair.
     tw_url = _str((view.get("other") or {}).get("tw_url"))
     city = (refs.city_from_link(tw_url) or refs.city_from_link(_str((top_comm or {}).get("communityUrl")))
             or refs.city_from_link(_str(comm.get("area_url"))) or city)
+    remember_city_id(city, prop.get("city_id"))
     community = _top_community(top_comm) if top_comm else {}
     community.update({k: v for k, v in {
         "id": _str(comm.get("id")) or community.get("id"),
@@ -705,7 +675,7 @@ def parse_rent_search_param(html):
     if not match:
         raise NuxtStateError("rental list page carries no search_param")
     try:
-        value = json.loads(match.group(1))
+        value = fastjson.loads(match.group(1))
     except ValueError as e:
         raise NuxtStateError(f"rental search_param is not JSON: {e}")
     if not isinstance(value, dict) or not value.get("city_id"):
@@ -1287,7 +1257,9 @@ def parse_loupan_main(html, project_id, city):
         mlng = re.search(r"\blng=(\d{2,3}\.\d+)", html)
         lat, lng = (_float(mlat.group(1)) if mlat else None), (_float(mlng.group(1)) if mlng else None)
     rankings = _dedupe([_text(s) for s in soup.select(".rank-bang-detail span")])
-    hotline = re.search(r'"telephone"\s*:\s*"(400\d{7})"', html) or re.search(r"\b(400\d{7})\b", html)
+    # JSON-LD "telephone" carries the project's extension ("4000919290,874565"); the
+    # bare 400 number alone is the site-wide hotline every project shares.
+    hotline = re.search(r'"telephone"\s*:\s*"(400\d{7})(?:,(\d+))?"', html) or re.search(r"\b(400\d{7})\b", html)
     album = _dedupe([_photo(img.get("src")) for img in soup.select(".loupan-album img.album-img")])
     album_tabs = [_text(t) for t in soup.select(".loupan-album .tab-item em")]
     floor_plans = []
@@ -1330,7 +1302,8 @@ def parse_loupan_main(html, project_id, city):
         "address": address,
         "lat": lat, "lng": lng,
         "rankings": rankings,
-        "sales_phone": hotline.group(1) if hotline else None,
+        "sales_phone": (f"{hotline.group(1)}转{hotline.group(2)}" if hotline.lastindex == 2 and hotline.group(2)
+                        else hotline.group(1)) if hotline else None,
         "album": {"tabs": [t for t in album_tabs if t], "photos": album},
         "floor_plans_summary": floor_plans,
     }

@@ -42,6 +42,7 @@ Failure taxonomy (scraper_errors, mapped to HTTP by route_glue):
   AnjukeNotFound       unknown id / page                                — never retried
 """
 import json
+import fastjson
 import os
 import re
 import sys
@@ -55,6 +56,7 @@ import egress
 from scraper_errors import BadRequest, Blocked, NotFound, UpstreamError
 from anjuke import refs
 from anjuke.parsers import is_gateway_page, page_title
+from scraper_utils import retry
 
 # Explicit profiles, never the generic "chrome" alias: with curl_cffi 0.17.0
 # the alias's TLS fingerprint draws the gateway stub on every exit while
@@ -109,15 +111,7 @@ def _retrying(fn):
     """Run fn() under the shared retry policy; every retry is a new session
     and so a new exit (AnjukeUpstreamError only; NotFound / BadRequest
     surface immediately)."""
-    last = None
-    for attempt in range(1, config.MAX_RETRIES + 1):
-        try:
-            return fn()
-        except AnjukeUpstreamError as e:
-            last = e
-            if attempt < config.MAX_RETRIES:
-                time.sleep(config.RETRY_BACKOFF * attempt)
-    raise last
+    return retry.run(fn, config, AnjukeUpstreamError, None)
 
 
 def _classify(resp, label):
@@ -168,7 +162,7 @@ def _get(url, label, mobile=False, referer=None, xhr=False, timeout=PAGE_TIMEOUT
 def _json(url, label, mobile=False, referer=None):
     text = _get(url, label, mobile=mobile, referer=referer, xhr=True, timeout=JSON_TIMEOUT)
     try:
-        return json.loads(text)
+        return fastjson.loads(text)
     except ValueError:
         raise AnjukeBlocked(f"non-JSON reply for {label}: {text[:120]}")
 

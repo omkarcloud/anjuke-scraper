@@ -433,6 +433,7 @@ def test_loupan_main_takes_its_city_from_the_canonical_link():
     rec = P.parse_loupan_main(fixture("loupan_517873_shanghai.html"), "517873", None)
     assert rec["link"] == "https://sh.fang.anjuke.com/loupan/517873.html"
     assert rec["mobile_link"] == "https://m.anjuke.com/sh/loupan/517873/"
+    assert rec["sales_phone"] == "4000919290转874565"      # the JSON-LD extension, not the shared hotline
     assert rec["name"] == "陆家嘴太古源 源邸"
 
 
